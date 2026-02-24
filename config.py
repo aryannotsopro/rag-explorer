@@ -33,8 +33,9 @@ def _inject_streamlit_secrets() -> None:
         found_keys = []
         for key, value in st.secrets.items():
             if isinstance(value, str):
-                os.environ[key.upper()] = value
-                found_keys.append(f"{key.upper()} (len={len(value)})")
+                val = value.strip()
+                os.environ[key.upper()] = val
+                found_keys.append(f"{key.upper()} (len={len(val)})")
         if found_keys:
             logger.info("Streamlit secrets injected: %s", ", ".join(found_keys))
         else:
