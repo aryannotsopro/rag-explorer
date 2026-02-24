@@ -32,7 +32,7 @@ def _inject_streamlit_secrets() -> None:
 
         for key, value in st.secrets.items():
             if isinstance(value, str):
-                os.environ.setdefault(key.upper(), value)
+                os.environ[key.upper()] = value
     except Exception:
         # Streamlit not installed, no secrets configured, or running outside Streamlit
         pass

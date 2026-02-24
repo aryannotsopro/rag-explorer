@@ -83,21 +83,24 @@ class RAGEngine:
         self.cfg = cfg
 
         # Pinecone client ------------------------------------------------------
-        self._pc = Pinecone(api_key=cfg.pinecone_api_key)
+        key = cfg.pinecone_api_key
+        masked_pc = f"{key[:5]}...{key[-4:]}" if len(key) > 10 else "***"
+        self._pc = Pinecone(api_key=key)
         self._index = None  # lazy — created in ensure_index()
 
         # OpenAI clients -------------------------------------------------------
-        self._sync_client = OpenAI(api_key=cfg.openai_api_key)
-        self._async_client = AsyncOpenAI(api_key=cfg.openai_api_key)
+        openai_key = cfg.openai_api_key
+        masked_oa = f"{openai_key[:7]}...{openai_key[-4:]}" if len(openai_key) > 10 else "***"
+        self._sync_client = OpenAI(api_key=openai_key)
+        self._async_client = AsyncOpenAI(api_key=openai_key)
 
         # Rate-limiting semaphore for concurrent embed / chat calls
         self._sem = asyncio.Semaphore(cfg.max_concurrent_requests)
 
         logger.info(
-            "RAGEngine initialised | index=%s | embed=%s | llm=%s",
-            cfg.pinecone_index_name,
-            cfg.embedding_model,
-            cfg.llm_model,
+            "RAGEngine init | pinecone_key=%s | openai_key=%s",
+            masked_pc,
+            masked_oa
         )
 
     # ------------------------------------------------------------------ #
