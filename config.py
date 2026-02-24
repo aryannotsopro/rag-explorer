@@ -30,12 +30,17 @@ def _inject_streamlit_secrets() -> None:
     try:
         import streamlit as st  # noqa: PLC0415
 
+        found_keys = []
         for key, value in st.secrets.items():
             if isinstance(value, str):
                 os.environ[key.upper()] = value
-    except Exception:
-        # Streamlit not installed, no secrets configured, or running outside Streamlit
-        pass
+                found_keys.append(f"{key.upper()} (len={len(value)})")
+        if found_keys:
+            logger.info("Streamlit secrets injected: %s", ", ".join(found_keys))
+        else:
+            logger.warning("No string secrets found in st.secrets")
+    except Exception as e:
+        logger.debug("Streamlit secrets injection skipped: %s", e)
 
 # --------------------------------------------------------------------------- #
 # Logging

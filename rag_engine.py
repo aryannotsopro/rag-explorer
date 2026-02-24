@@ -84,13 +84,25 @@ class RAGEngine:
 
         # Pinecone client ------------------------------------------------------
         key = cfg.pinecone_api_key
-        masked_pc = f"{key[:5]}...{key[-4:]}" if len(key) > 10 else "***"
+        if not key:
+            masked_pc = "[EMPTY]"
+        elif len(key) <= 10:
+            masked_pc = f"{key} [Too Short]"
+        else:
+            masked_pc = f"{key[:5]}...{key[-4:]}"
+        
         self._pc = Pinecone(api_key=key)
         self._index = None  # lazy — created in ensure_index()
 
         # OpenAI clients -------------------------------------------------------
         openai_key = cfg.openai_api_key
-        masked_oa = f"{openai_key[:7]}...{openai_key[-4:]}" if len(openai_key) > 10 else "***"
+        if not openai_key:
+            masked_oa = "[EMPTY]"
+        elif len(openai_key) <= 10:
+            masked_oa = f"{openai_key} [Too Short]"
+        else:
+            masked_oa = f"{openai_key[:7]}...{openai_key[-4:]}"
+            
         self._sync_client = OpenAI(api_key=openai_key)
         self._async_client = AsyncOpenAI(api_key=openai_key)
 
@@ -98,7 +110,7 @@ class RAGEngine:
         self._sem = asyncio.Semaphore(cfg.max_concurrent_requests)
 
         logger.info(
-            "RAGEngine init | pinecone_key=%s | openai_key=%s",
+            "RAGEngine init | pc_key=%s | oa_key=%s",
             masked_pc,
             masked_oa
         )
