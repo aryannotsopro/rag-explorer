@@ -6,6 +6,7 @@ pinecone-client>=3.2.2
 langchain>=0.2.0
 langchain-openai>=0.1.0
 langchain-community>=0.2.0
+langchain-text-splitters>=0.2.0
 
 # ── Data validation ──────────────────────────────────────────────────────────
 pydantic>=2.7.0
