@@ -80,7 +80,7 @@ class TestRAGEngineInit:
         assert engine is not None
         mock_pc.assert_called_once_with(api_key="test-key")
         mock_groq.assert_called_once_with(api_key="test-groq-key")
-        assert engine._hf_endpoint == "https://api-inference.huggingface.co/pipeline/feature-extraction/hf-model"
+        assert engine._hf_endpoint == "https://api-inference.huggingface.co/models/hf-model"
 
 
 class TestEmbedTexts:
