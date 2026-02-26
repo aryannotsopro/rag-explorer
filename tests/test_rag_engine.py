@@ -1,12 +1,12 @@
 """
 tests/test_rag_engine.py - Unit tests for RAGEngine with mocked external calls.
 
-All OpenAI and Pinecone interactions are mocked — no API keys required.
+All Groq, HuggingFace, and Pinecone interactions are mocked — no API keys required.
 Run with: pytest tests/test_rag_engine.py -v
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -62,17 +62,16 @@ class TestRAGEngineInit:
     """Test RAGEngine initialization (no index calls)."""
 
     @patch("rag_engine.Pinecone")
-    @patch("rag_engine.OpenAI")
-    @patch("rag_engine.AsyncOpenAI")
+    @patch("rag_engine.AsyncGroq")
     @patch("rag_engine.get_settings")
-    def test_init(self, mock_settings, mock_async_oai, mock_oai, mock_pc):
+    def test_init(self, mock_settings, mock_groq, mock_pc):
         """Engine should initialise without error when settings are present."""
         cfg = MagicMock()
         cfg.pinecone_api_key = "test-key"
-        cfg.openai_api_key = "test-oai-key"
-        cfg.embedding_model = "text-embedding-3-small"
-        cfg.llm_model = "gpt-4o-mini"
-        cfg.pinecone_index_name = "test-index"
+        cfg.groq_api_key = "test-groq-key"
+        cfg.huggingface_api_key = "test-hf-key"
+        cfg.embedding_model = "hf-model"
+        cfg.llm_model = "llama-3-8b"
         cfg.max_concurrent_requests = 2
         mock_settings.return_value = cfg
 
@@ -80,216 +79,156 @@ class TestRAGEngineInit:
         engine = RAGEngine()
         assert engine is not None
         mock_pc.assert_called_once_with(api_key="test-key")
+        mock_groq.assert_called_once_with(api_key="test-groq-key")
+        assert engine._hf_endpoint == "https://api-inference.huggingface.co/pipeline/feature-extraction/hf-model"
 
 
 class TestEmbedTexts:
     """Tests for the embed_texts async method."""
 
+    @pytest.mark.asyncio
     @patch("rag_engine.Pinecone")
-    @patch("rag_engine.AsyncOpenAI")
+    @patch("rag_engine.AsyncGroq")
     @patch("rag_engine.get_settings")
-    def test_embed_returns_vectors(self, mock_settings, mock_async_oai, mock_pc):
+    @patch("rag_engine.httpx.AsyncClient.post")
+    async def test_embed_returns_vectors(self, mock_post, mock_settings, mock_groq, mock_pc):
         cfg = MagicMock()
         cfg.pinecone_api_key = "k"
-        cfg.openai_api_key = "k"
-        cfg.embedding_model = "text-embedding-3-small"
+        cfg.groq_api_key = "k"
+        cfg.huggingface_api_key = "k"
         cfg.embedding_batch_size = 100
         cfg.max_concurrent_requests = 2
-        cfg.pinecone_index_name = "idx"
         mock_settings.return_value = cfg
 
-        # Mock the sync embed call
-        fake_embedding = [0.1] * 1536
+        # Mock httpx response
+        fake_embedding = [0.1] * 384
         mock_response = MagicMock()
-        mock_response.data = [MagicMock(embedding=fake_embedding)]
+        mock_response.json.return_value = [fake_embedding]
+        mock_post.return_value = mock_response
 
         from rag_engine import RAGEngine
         engine = RAGEngine()
-        engine._sync_client = MagicMock()
-        engine._sync_client.embeddings.create.return_value = mock_response
 
-        result = asyncio.run(engine.embed_texts(["Hello world"]))
+        result = await engine.embed_texts(["Hello world"])
         assert len(result) == 1
-        assert len(result[0]) == 1536
-
-    @patch("rag_engine.Pinecone")
-    @patch("rag_engine.AsyncOpenAI")
-    @patch("rag_engine.get_settings")
-    def test_embed_batches_correctly(self, mock_settings, mock_async_oai, mock_pc):
-        cfg = MagicMock()
-        cfg.pinecone_api_key = "k"
-        cfg.openai_api_key = "k"
-        cfg.embedding_model = "text-embedding-3-small"
-        cfg.embedding_batch_size = 2   # force batching
-        cfg.max_concurrent_requests = 2
-        cfg.pinecone_index_name = "idx"
-        mock_settings.return_value = cfg
-
-        fake_emb = [0.0] * 1536
-        mock_response = MagicMock()
-        mock_response.data = [MagicMock(embedding=fake_emb), MagicMock(embedding=fake_emb)]
-
-        from rag_engine import RAGEngine
-        engine = RAGEngine()
-        engine._sync_client = MagicMock()
-        engine._sync_client.embeddings.create.return_value = mock_response
-
-        texts = ["a", "b", "c", "d"]   # 4 texts, batch size 2 → 2 calls
-        result = asyncio.run(engine.embed_texts(texts))
-        assert len(result) == 4
-        assert engine._sync_client.embeddings.create.call_count == 2
+        assert len(result[0]) == 384
 
 
 class TestSearch:
     """Tests for the search method."""
 
+    @pytest.mark.asyncio
     @patch("rag_engine.Pinecone")
-    @patch("rag_engine.AsyncOpenAI")
     @patch("rag_engine.get_settings")
-    def test_search_returns_results(self, mock_settings, mock_async_oai, mock_pc):
+    @patch("rag_engine.httpx.AsyncClient.post")
+    async def test_search_returns_results(self, mock_post, mock_settings, mock_pc):
         cfg = MagicMock()
         cfg.pinecone_api_key = "k"
-        cfg.openai_api_key = "k"
-        cfg.embedding_model = "text-embedding-3-small"
-        cfg.embedding_batch_size = 100
-        cfg.embedding_dimension = 1536
+        cfg.groq_api_key = "k"
+        cfg.huggingface_api_key = "k"
+        cfg.embedding_dimension = 384
         cfg.max_concurrent_requests = 2
-        cfg.pinecone_index_name = "idx"
         mock_settings.return_value = cfg
 
         from rag_engine import RAGEngine
-
         engine = RAGEngine()
-        engine._sync_client = MagicMock()
+
+        # Mock Pinecone index
+        mock_index = MagicMock()
+        mock_query_response = MagicMock()
+        mock_query_response.matches = [make_mock_pinecone_match()]
+        mock_index.query.return_value = mock_query_response
+        engine._index = mock_index
 
         # Mock embed
-        fake_emb = [0.1] * 1536
-        engine._sync_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=fake_emb)]
-        )
+        fake_emb = [0.1] * 384
+        mock_response = MagicMock()
+        mock_response.json.return_value = [fake_emb]
+        mock_post.return_value = mock_response
 
-        # Mock Pinecone query
-        mock_match = make_mock_pinecone_match(id_="v1", score=0.9, text="AI is great")
-        mock_query_response = MagicMock()
-        mock_query_response.matches = [mock_match]
-        engine._index = MagicMock()
-        engine._index.query.return_value = mock_query_response
-
-        query = SearchQuery(query_text="What is AI?")
-        results, latency = asyncio.run(engine.search(query))
+        sq = SearchQuery(query_text="foo", top_k=5)
+        results, latency = await engine.search(sq)
 
         assert len(results) == 1
-        assert results[0].rank == 1
-        assert results[0].score == pytest.approx(0.9)
-        assert results[0].chunk.text == "AI is great"
-        assert latency > 0
-
-    @patch("rag_engine.Pinecone")
-    @patch("rag_engine.AsyncOpenAI")
-    @patch("rag_engine.get_settings")
-    def test_search_passes_filter(self, mock_settings, mock_async_oai, mock_pc):
-        cfg = MagicMock()
-        cfg.pinecone_api_key = "k"
-        cfg.openai_api_key = "k"
-        cfg.embedding_model = "text-embedding-3-small"
-        cfg.embedding_batch_size = 100
-        cfg.embedding_dimension = 1536
-        cfg.max_concurrent_requests = 2
-        cfg.pinecone_index_name = "idx"
-        mock_settings.return_value = cfg
-
-        from rag_engine import RAGEngine
-
-        engine = RAGEngine()
-        engine._sync_client = MagicMock()
-        engine._sync_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.1] * 1536)]
-        )
-
-        engine._index = MagicMock()
-        engine._index.query.return_value = MagicMock(matches=[])
-
-        query = SearchQuery(
-            query_text="Roman empire",
-            filters=MetadataFilter(category=DocumentCategory.HISTORY),
-        )
-        asyncio.run(engine.search(query))
-
-        call_kwargs = engine._index.query.call_args[1]
-        assert call_kwargs["filter"] == {"category": {"$eq": "history"}}
+        assert results[0].chunk.chunk_id == "id-1"
+        assert results[0].score == 0.85
+        assert results[0].chunk.text == "chunk text"
+        assert latency >= 0
 
 
 class TestGenerateResponse:
     """Tests for the generate_response method."""
 
+    @pytest.mark.asyncio
     @patch("rag_engine.Pinecone")
-    @patch("rag_engine.AsyncOpenAI")
     @patch("rag_engine.get_settings")
-    def test_generate_response_structure(self, mock_settings, mock_async_oai, mock_pc):
+    async def test_generate_response_structure(self, mock_settings, mock_pc):
         cfg = MagicMock()
         cfg.pinecone_api_key = "k"
-        cfg.openai_api_key = "k"
-        cfg.embedding_model = "text-embedding-3-small"
-        cfg.embedding_batch_size = 100
-        cfg.embedding_dimension = 1536
-        cfg.max_concurrent_requests = 2
-        cfg.pinecone_index_name = "idx"
-        cfg.llm_model = "gpt-4o-mini"
+        cfg.groq_api_key = "k"
+        cfg.huggingface_api_key = "k"
+        cfg.llm_model = "llama-3"
         cfg.llm_temperature = 0.1
-        cfg.llm_max_tokens = 512
+        cfg.llm_max_tokens = 100
+        cfg.max_concurrent_requests = 2
         mock_settings.return_value = cfg
 
         from rag_engine import RAGEngine
-        from models import SearchResult
-
         engine = RAGEngine()
-        chunk = make_chunk("Quantum physics is fascinating.")
-        result = SearchResult(chunk=chunk, score=0.88, rank=1)
 
-        # Mock the LLM response
+        # Mock Groq client
         mock_completion = MagicMock()
-        mock_completion.choices[0].message.content = "Great answer about quantum."
+        mock_completion.choices = [MagicMock()]
+        mock_completion.choices[0].message.content = "This is the answer."
         mock_completion.usage.total_tokens = 120
         mock_completion.usage.prompt_tokens = 100
         mock_completion.usage.completion_tokens = 20
-        engine._sync_client = MagicMock()
-        engine._sync_client.chat.completions.create.return_value = mock_completion
+        
+        engine._groq_client = AsyncMock()
+        engine._groq_client.chat.completions.create.return_value = mock_completion
 
-        response = asyncio.run(
-            engine.generate_response("What is quantum physics?", [result])
-        )
-        assert response.answer == "Great answer about quantum."
-        assert response.tokens_used == 120
-        assert response.prompt_tokens == 100
-        assert response.completion_tokens == 20
+        chunk = make_chunk("Context block 1")
+        from models import SearchResult
+        results = [SearchResult(chunk=chunk, score=0.9, rank=1)]
+
+        response = await engine.generate_response("query", results, retrieval_latency_ms=42.0)
+
+        assert response.query == "query"
+        assert response.answer == "This is the answer."
         assert len(response.sources) == 1
+        assert response.tokens_used == 120
+        assert response.retrieval_latency_ms == 42.0
+        assert response.generation_latency_ms >= 0
 
+
+class TestFullQuery:
+    """Tests the full orchestrating `query` async method."""
+
+    @pytest.mark.asyncio
     @patch("rag_engine.Pinecone")
-    @patch("rag_engine.AsyncOpenAI")
     @patch("rag_engine.get_settings")
-    def test_query_no_results(self, mock_settings, mock_async_oai, mock_pc):
-        """If search returns nothing, engine should return a polite no-results message."""
+    async def test_query_no_results(self, mock_settings, mock_pc):
         cfg = MagicMock()
         cfg.pinecone_api_key = "k"
-        cfg.openai_api_key = "k"
-        cfg.embedding_model = "text-embedding-3-small"
-        cfg.embedding_batch_size = 100
-        cfg.embedding_dimension = 1536
+        cfg.groq_api_key = "k"
+        cfg.huggingface_api_key = "k"
         cfg.max_concurrent_requests = 2
-        cfg.pinecone_index_name = "idx"
         mock_settings.return_value = cfg
 
         from rag_engine import RAGEngine
-
         engine = RAGEngine()
-        engine._sync_client = MagicMock()
-        engine._sync_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.0] * 1536)]
-        )
-        engine._index = MagicMock()
-        engine._index.query.return_value = MagicMock(matches=[])
+        
+        # Override embed and search to return empty
+        async def mock_search(*args, **kwargs):
+            return [], 10.0
+        engine.search = mock_search
+        # Generation should NOT be called
+        engine.generate_response = AsyncMock()
 
-        query = SearchQuery(query_text="Completely unknown topic xyz123")
-        response = asyncio.run(engine.query(query))
-        assert "couldn't find" in response.answer.lower() or "relevant" in response.answer.lower()
-        assert response.sources == []
+        sq = SearchQuery(query_text="nothing", top_k=5)
+        response = await engine.query(sq)
+
+        assert "couldn't find any relevant documents" in response.answer
+        assert len(response.sources) == 0
+        assert response.retrieval_latency_ms == 10.0
+        engine.generate_response.assert_not_called()

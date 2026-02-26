@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # API Keys
     # ------------------------------------------------------------------ #
-    openai_api_key: str = Field(..., description="OpenAI API key")
+    groq_api_key: str = Field(..., description="Groq API key")
+    huggingface_api_key: str = Field(..., description="HuggingFace API key")
     pinecone_api_key: str = Field(..., description="Pinecone API key")
 
     # ------------------------------------------------------------------ #
@@ -90,19 +91,23 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------ #
-    # OpenAI / Embedding settings
+    # HuggingFace / Embedding settings
     # ------------------------------------------------------------------ #
     embedding_model: str = Field(
-        default="text-embedding-3-small",
-        description="OpenAI embedding model name",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        description="HuggingFace embedding model name",
     )
     embedding_dimension: int = Field(
-        default=1536,
+        default=384,
         description="Dimension of the embedding vectors (must match Pinecone index)",
     )
+
+    # ------------------------------------------------------------------ #
+    # Groq / LLM settings
+    # ------------------------------------------------------------------ #
     llm_model: str = Field(
-        default="gpt-4o-mini",
-        description="OpenAI chat model used for answer generation",
+        default="llama-3.3-70b-versatile",
+        description="Groq chat model used for answer generation",
     )
     llm_temperature: float = Field(
         default=0.1,

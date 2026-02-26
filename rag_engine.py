@@ -3,8 +3,8 @@ rag_engine.py - Core RAG orchestration layer.
 
 Responsibilities:
   1. Manage the Pinecone index (create if absent, query, upsert, delete).
-  2. Generate OpenAI embeddings in batches with retry logic and rate limiting.
-  3. Build a prompt from retrieved context and call GPT-4o-mini.
+  2. Generate HuggingFace embeddings in batches with retry logic and rate limiting.
+  3. Build a prompt from retrieved context and call Groq.
   4. Return fully-typed RAGResponse objects.
 
 All heavy I/O uses async where possible; synchronous callers in Streamlit can
@@ -18,8 +18,8 @@ import logging
 import time
 from typing import Any, Dict, Iterator, List, Optional
 
-import openai
-from openai import AsyncOpenAI, OpenAI
+import httpx
+from groq import AsyncGroq
 from pinecone import Pinecone, ServerlessSpec
 
 from config import get_settings
@@ -83,36 +83,51 @@ class RAGEngine:
         self.cfg = cfg
 
         # Pinecone client ------------------------------------------------------
-        key = cfg.pinecone_api_key
-        if not key:
+        pc_key = cfg.pinecone_api_key
+        if not pc_key:
             masked_pc = "[EMPTY]"
-        elif len(key) <= 10:
-            masked_pc = f"{key} [Too Short]"
+        elif len(pc_key) <= 10:
+            masked_pc = f"{pc_key} [Too Short]"
         else:
-            masked_pc = f"{key[:5]}...{key[-4:]}"
-        
-        self._pc = Pinecone(api_key=key)
+            masked_pc = f"{pc_key[:5]}...{pc_key[-4:]}"
+            
+        self._pc = Pinecone(api_key=pc_key)
         self._index = None  # lazy — created in ensure_index()
 
-        # OpenAI clients -------------------------------------------------------
-        openai_key = cfg.openai_api_key
-        if not openai_key:
-            masked_oa = "[EMPTY]"
-        elif len(openai_key) <= 10:
-            masked_oa = f"{openai_key} [Too Short]"
+        # Groq client --------------------------------------------------------
+        groq_key = cfg.groq_api_key
+        if not groq_key:
+            masked_groq = "[EMPTY]"
+        elif len(groq_key) <= 10:
+            masked_groq = f"{groq_key} [Too Short]"
         else:
-            masked_oa = f"{openai_key[:7]}...{openai_key[-4:]}"
+            masked_groq = f"{groq_key[:7]}...{groq_key[-4:]}"
             
-        self._sync_client = OpenAI(api_key=openai_key)
-        self._async_client = AsyncOpenAI(api_key=openai_key)
+        self._groq_client = AsyncGroq(api_key=groq_key)
+        
+        # HuggingFace Client -------------------------------------------------
+        hf_key = cfg.huggingface_api_key
+        if not hf_key:
+            masked_hf = "[EMPTY]"
+        elif len(hf_key) <= 10:
+            masked_hf = f"{hf_key} [Too Short]"
+        else:
+            masked_hf = f"{hf_key[:5]}...{hf_key[-4:]}"
+            
+        self._hf_headers = {
+            "Authorization": f"Bearer {hf_key}",
+            "Content-Type": "application/json"
+        }
+        self._hf_endpoint = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{cfg.embedding_model}"
 
         # Rate-limiting semaphore for concurrent embed / chat calls
         self._sem = asyncio.Semaphore(cfg.max_concurrent_requests)
 
         logger.info(
-            "RAGEngine init | pc_key=%s | oa_key=%s",
+            "RAGEngine init | pc_key=%s | groq_key=%s | hf_key=%s",
             masked_pc,
-            masked_oa
+            masked_groq,
+            masked_hf
         )
 
     # ------------------------------------------------------------------ #
@@ -162,23 +177,25 @@ class RAGEngine:
     # ------------------------------------------------------------------ #
 
     @retry(
-        retry=retry_if_exception_type(openai.RateLimitError),
         wait=wait_exponential(multiplier=1, min=2, max=60),
         stop=stop_after_attempt(5),
         reraise=True,
     )
-    def _embed_batch_sync(self, texts: List[str]) -> List[List[float]]:
-        """Embed a batch of texts synchronously (used internally)."""
-        response = self._sync_client.embeddings.create(
-            model=self.cfg.embedding_model,
-            input=texts,
-        )
-        return [item.embedding for item in response.data]
+    async def _embed_batch(self, texts: List[str]) -> List[List[float]]:
+        """Embed a batch of texts using HuggingFace Inference API."""
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self._hf_endpoint,
+                headers=self._hf_headers,
+                json={"inputs": texts, "options": {"wait_for_model": True}}
+            )
+            response.raise_for_status()
+            # HF feature extraction returns List[List[float]]
+            return response.json()
 
     async def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """
-        Embed *texts* using the configured OpenAI model, batching automatically.
-
+        Embed *texts* using the configured HuggingFace model, batching automatically.
         Returns a list of embedding vectors in the same order as *texts*.
         """
         cfg = self.cfg
@@ -186,9 +203,7 @@ class RAGEngine:
 
         for batch in _batched(texts, cfg.embedding_batch_size):
             async with self._sem:
-                embeddings = await asyncio.get_event_loop().run_in_executor(
-                    None, self._embed_batch_sync, batch
-                )
+                embeddings = await self._embed_batch(batch)
             all_embeddings.extend(embeddings)
 
         return all_embeddings
@@ -321,13 +336,12 @@ class RAGEngine:
         )
 
     @retry(
-        retry=retry_if_exception_type(openai.RateLimitError),
         wait=wait_exponential(multiplier=1, min=2, max=60),
         stop=stop_after_attempt(5),
         reraise=True,
     )
-    def _chat_sync(self, messages: list) -> openai.types.chat.ChatCompletion:
-        return self._sync_client.chat.completions.create(
+    async def _chat(self, messages: list) -> Any:
+        return await self._groq_client.chat.completions.create(
             model=self.cfg.llm_model,
             messages=messages,
             temperature=self.cfg.llm_temperature,
@@ -353,17 +367,17 @@ class RAGEngine:
         ]
 
         async with self._sem:
-            completion = await asyncio.get_event_loop().run_in_executor(
-                None, self._chat_sync, messages
-            )
+            completion = await self._chat(messages)
 
         gen_latency = _ms(t0)
-        usage = completion.usage
+
         answer = completion.choices[0].message.content or ""
+        usage = completion.usage
+        total_tokens = usage.total_tokens if usage else 0
 
         logger.info(
             "Generation complete | tokens=%d | latency=%.1f ms",
-            usage.total_tokens,
+            total_tokens,
             gen_latency,
         )
 
@@ -371,9 +385,9 @@ class RAGEngine:
             query=query,
             answer=answer,
             sources=results,
-            tokens_used=usage.total_tokens,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
+            tokens_used=total_tokens,
+            prompt_tokens=usage.prompt_tokens if usage else 0,
+            completion_tokens=usage.completion_tokens if usage else 0,
             retrieval_latency_ms=retrieval_latency_ms,
             generation_latency_ms=gen_latency,
         )

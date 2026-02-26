@@ -1,6 +1,6 @@
 # 🔍 RAG Explorer
 
-> Production-quality **Retrieval Augmented Generation (RAG)** system with metadata filtering. Powered by OpenAI Embeddings + GPT-4o-mini + Pinecone. Beautiful Streamlit UI.
+> Production-quality **Retrieval Augmented Generation (RAG)** system with metadata filtering. Powered by **HuggingFace Embeddings + Groq Llama-3 + Pinecone**. Beautiful Streamlit UI.
 
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io)
 
@@ -12,7 +12,7 @@
 |---|---|
 | **Document formats** | PDF, TXT, DOCX |
 | **Metadata filtering** | Category, source, author, date range, tags |
-| **LLM** | GPT-4o-mini with inline citations |
+| **LLM** | Groq (Llama-3 70b) with inline citations |
 | **UI** | Dark glassmorphism Streamlit app |
 | **Query history** | Sidebar with replay & export (JSON/CSV) |
 | **Performance metrics** | Retrieval ms, generation ms, tokens used |
@@ -25,14 +25,14 @@
 ```mermaid
 flowchart LR
     U([User]) -->|Upload| DI[data_ingestion.py]
-    DI -->|Embed| OAI[(OpenAI Embeddings)]
-    OAI -->|Vectors + Metadata| PC[(Pinecone)]
+    DI -->|Embed| HF[(HuggingFace Embeddings)]
+    HF -->|Vectors + Metadata| PC[(Pinecone)]
     U -->|Query| RE[rag_engine.py]
-    RE -->|Embed query| OAI
-    OAI -->|ANN search| PC
+    RE -->|Embed query| HF
+    HF -->|ANN search| PC
     PC -->|Top-K chunks| RE
-    RE -->|Context prompt| GPT[GPT-4o-mini]
-    GPT -->|Answer + citations| APP[app.py Streamlit]
+    RE -->|Context prompt| GROQ[Groq Llama-3]
+    GROQ -->|Answer + citations| APP[app.py Streamlit]
     APP --> U
 ```
 
@@ -84,7 +84,8 @@ copy .env.example .env
 Edit `.env` and fill in your keys:
 
 ```env
-OPENAI_API_KEY=sk-...
+GROQ_API_KEY=gsk_...
+HUGGINGFACE_API_KEY=hf_...
 PINECONE_API_KEY=pcsk_...
 PINECONE_ENVIRONMENT=us-east-1
 PINECONE_INDEX_NAME=rag-index
@@ -149,7 +150,8 @@ Complete the "Publish to GitHub" steps above first.
 Paste the following into the Secrets box (replace with your real keys):
 
 ```toml
-OPENAI_API_KEY = "sk-..."
+GROQ_API_KEY = "gsk_..."
+HUGGINGFACE_API_KEY = "hf_..."
 PINECONE_API_KEY = "pcsk_..."
 PINECONE_ENVIRONMENT = "us-east-1"
 PINECONE_CLOUD = "aws"
@@ -206,12 +208,13 @@ All settings can be overridden in `.env` (local) or the Streamlit Secrets panel 
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | **Required** |
+| `GROQ_API_KEY` | — | **Required** |
+| `HUGGINGFACE_API_KEY` | — | **Required** |
 | `PINECONE_API_KEY` | — | **Required** |
 | `PINECONE_ENVIRONMENT` | `us-east-1` | Index cloud region |
 | `PINECONE_INDEX_NAME` | `rag-index` | Auto-created if missing |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI embed model |
-| `LLM_MODEL` | `gpt-4o-mini` | Chat model |
+| `EMBEDDING_MODEL` | `sentence-transformers...` | HuggingFace embed model |
+| `LLM_MODEL` | `llama-3.3-70b-versatile` | Groq Chat model |
 | `CHUNK_SIZE` | `1000` | Characters per chunk |
 | `CHUNK_OVERLAP` | `200` | Overlap between chunks |
 | `DEFAULT_TOP_K` | `5` | Results per query |
