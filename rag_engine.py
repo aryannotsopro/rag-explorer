@@ -118,7 +118,7 @@ class RAGEngine:
             "Authorization": f"Bearer {hf_key}",
             "Content-Type": "application/json"
         }
-        self._hf_endpoint = f"https://api-inference.huggingface.co/models/{cfg.embedding_model}"
+        self._hf_endpoint = f"https://router.huggingface.co/hf-inference/models/{cfg.embedding_model}"
 
         # Rate-limiting semaphore for concurrent embed / chat calls
         self._sem = asyncio.Semaphore(cfg.max_concurrent_requests)
