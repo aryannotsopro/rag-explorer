@@ -63,8 +63,9 @@ class TestRAGEngineInit:
 
     @patch("rag_engine.Pinecone")
     @patch("rag_engine.AsyncGroq")
+    @patch("rag_engine.AsyncInferenceClient")
     @patch("rag_engine.get_settings")
-    def test_init(self, mock_settings, mock_groq, mock_pc):
+    def test_init(self, mock_settings, mock_hf, mock_groq, mock_pc):
         """Engine should initialise without error when settings are present."""
         cfg = MagicMock()
         cfg.pinecone_api_key = "test-key"
@@ -80,7 +81,7 @@ class TestRAGEngineInit:
         assert engine is not None
         mock_pc.assert_called_once_with(api_key="test-key")
         mock_groq.assert_called_once_with(api_key="test-groq-key")
-        assert engine._hf_endpoint == "https://router.huggingface.co/hf-inference/models/hf-model"
+        mock_hf.assert_called_once_with(token="test-hf-key")
 
 
 class TestEmbedTexts:
@@ -90,8 +91,8 @@ class TestEmbedTexts:
     @patch("rag_engine.Pinecone")
     @patch("rag_engine.AsyncGroq")
     @patch("rag_engine.get_settings")
-    @patch("rag_engine.httpx.AsyncClient.post")
-    async def test_embed_returns_vectors(self, mock_post, mock_settings, mock_groq, mock_pc):
+    @patch("rag_engine.AsyncInferenceClient")
+    async def test_embed_returns_vectors(self, mock_hf, mock_settings, mock_groq, mock_pc):
         cfg = MagicMock()
         cfg.pinecone_api_key = "k"
         cfg.groq_api_key = "k"
@@ -100,14 +101,13 @@ class TestEmbedTexts:
         cfg.max_concurrent_requests = 2
         mock_settings.return_value = cfg
 
-        # Mock httpx response
-        fake_embedding = [0.1] * 384
-        mock_response = MagicMock()
-        mock_response.json.return_value = [fake_embedding]
-        mock_post.return_value = mock_response
-
         from rag_engine import RAGEngine
         engine = RAGEngine()
+
+        # Mock huggingface response
+        import numpy as np
+        fake_embedding = np.array([[0.1] * 384])
+        engine._hf_client.feature_extraction = AsyncMock(return_value=fake_embedding)
 
         result = await engine.embed_texts(["Hello world"])
         assert len(result) == 1
@@ -120,8 +120,8 @@ class TestSearch:
     @pytest.mark.asyncio
     @patch("rag_engine.Pinecone")
     @patch("rag_engine.get_settings")
-    @patch("rag_engine.httpx.AsyncClient.post")
-    async def test_search_returns_results(self, mock_post, mock_settings, mock_pc):
+    @patch("rag_engine.AsyncInferenceClient")
+    async def test_search_returns_results(self, mock_hf, mock_settings, mock_pc):
         cfg = MagicMock()
         cfg.pinecone_api_key = "k"
         cfg.groq_api_key = "k"
@@ -140,11 +140,9 @@ class TestSearch:
         mock_index.query.return_value = mock_query_response
         engine._index = mock_index
 
-        # Mock embed
-        fake_emb = [0.1] * 384
-        mock_response = MagicMock()
-        mock_response.json.return_value = [fake_emb]
-        mock_post.return_value = mock_response
+        import numpy as np
+        fake_embedding = np.array([[0.1] * 384])
+        engine._hf_client.feature_extraction = AsyncMock(return_value=fake_embedding)
 
         sq = SearchQuery(query_text="foo", top_k=5)
         results, latency = await engine.search(sq)

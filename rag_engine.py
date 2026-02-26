@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 import httpx
 from groq import AsyncGroq
+from huggingface_hub import AsyncInferenceClient
 from pinecone import Pinecone, ServerlessSpec
 
 from config import get_settings
@@ -114,11 +115,7 @@ class RAGEngine:
         else:
             masked_hf = f"{hf_key[:5]}...{hf_key[-4:]}"
             
-        self._hf_headers = {
-            "Authorization": f"Bearer {hf_key}",
-            "Content-Type": "application/json"
-        }
-        self._hf_endpoint = f"https://router.huggingface.co/hf-inference/models/{cfg.embedding_model}"
+        self._hf_client = AsyncInferenceClient(token=hf_key)
 
         # Rate-limiting semaphore for concurrent embed / chat calls
         self._sem = asyncio.Semaphore(cfg.max_concurrent_requests)
@@ -183,15 +180,16 @@ class RAGEngine:
     )
     async def _embed_batch(self, texts: List[str]) -> List[List[float]]:
         """Embed a batch of texts using HuggingFace Inference API."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._hf_endpoint,
-                headers=self._hf_headers,
-                json={"inputs": texts, "options": {"wait_for_model": True}}
-            )
-            response.raise_for_status()
-            # HF feature extraction returns List[List[float]]
-            return response.json()
+        import numpy as np
+        response = await self._hf_client.feature_extraction(
+            text=texts,
+            model=self.cfg.embedding_model,
+        )
+        # response is usually a numpy-like array or list of lists depending on the backend, 
+        # huggingface_hub v0.20+ returns a numpy array for feature_extraction
+        if hasattr(response, "tolist"):
+            return response.tolist()
+        return response
 
     async def embed_texts(self, texts: List[str]) -> List[List[float]]:
         """
